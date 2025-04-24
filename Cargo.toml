@@ -1,8 +1,8 @@
 [package]
-name = "tower-defense"
+name = "tower-defence"
 version = "0.0.0"
 edition = "2024"
-description = "Middleware utilities to authenticate RPC calls using libp2p node keys"
+description = "Typosquatting protection. Use tower-defense even if you are British, please."
 license = "Apache-2.0 OR (GPL-3.0-or-later WITH Classpath-exception-2.0)"
 repository = "https://github.com/Mosaic-Chain/tower-defense"
 
