@@ -1,0 +1,17 @@
+[package]
+name = "tower-defense"
+version = "0.1.0"
+edition = "2024"
+description = "Middleware utilities to authenticate RPC calls using libp2p node keys"
+license = "Apache-2.0 OR (GPL-3.0-or-later WITH Classpath-exception-2.0)"
+repository = "https://github.com/Mosaic-Chain/tower-defense"
+
+[dependencies]
+ed25519-dalek = { version = "2.1.1", features = ["serde"] }
+jsonrpsee = { version = "0.25.1", features = ["client", "server"] }
+serde = { version = "1.0.219", features = ["derive"]}
+serde_json = "1.0.140"
+thiserror = "2.0.12"
+
+[dev-dependencies]
+tokio = { version = "1.44.2", features = ["full"] }
