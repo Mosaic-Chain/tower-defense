@@ -7,7 +7,7 @@ use jsonrpsee::{
     core::{params::ObjectParams, traits::ToRpcParams},
     types::Id,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
 use crate::{
@@ -15,11 +15,12 @@ use crate::{
     error::Error,
 };
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthenticatedParams<'a> {
     pub(crate) signer: PublicKey,
     pub(crate) signature: Signature,
     pub(crate) timestamp: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) inner: Option<Cow<'a, RawValue>>,
 }
 
@@ -86,11 +87,14 @@ impl<'a> AuthenticatedParams<'a> {
 
 impl ToRpcParams for AuthenticatedParams<'_> {
     fn to_rpc_params(self) -> Result<Option<Box<RawValue>>, serde_json::Error> {
+        let serde_json::Value::Object(obj) = serde_json::to_value(self)? else {
+            unreachable!("this type will always be serialize as a map");
+        };
+
         let mut p = ObjectParams::new();
-        p.insert("signer", self.signer)?;
-        p.insert("signature", self.signature)?;
-        p.insert("timestamp", self.timestamp)?;
-        p.insert("inner", self.inner)?;
+        for (k, v) in obj {
+            p.insert(&k, v)?;
+        }
 
         p.to_rpc_params()
     }
