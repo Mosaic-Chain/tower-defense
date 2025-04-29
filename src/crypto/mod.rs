@@ -3,6 +3,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Error;
 
+pub mod peer_id;
+pub use peer_id::PeerId;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Keypair(ed25519::SigningKey);

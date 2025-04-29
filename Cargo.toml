@@ -7,11 +7,15 @@ license = "Apache-2.0 OR (GPL-3.0-or-later WITH Classpath-exception-2.0)"
 repository = "https://github.com/Mosaic-Chain/tower-defense"
 
 [dependencies]
+bs58 = { version = "0.5.1" }
 ed25519-dalek = { version = "2.1.1", features = ["serde"] }
 jsonrpsee = { version = "0.25.1", features = ["client", "server"] }
+multihash = { version = "0.19.3"}
+quick-protobuf = { version = "0.8.1" }
 serde = { version = "1.0.219", features = ["derive"]}
-serde_json = "1.0.140"
-thiserror = "2.0.12"
+serde_json = { version = "1.0.140" }
+sha2 = { version = "0.10.8" }
+thiserror = { version = "2.0.12" }
 
 [dev-dependencies]
-tokio = { version = "1.44.2", features = ["full"] }
+tokio = { version = "1.44.2", features = ["macros", "rt"] }

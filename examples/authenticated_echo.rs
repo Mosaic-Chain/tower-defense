@@ -6,7 +6,7 @@ use jsonrpsee::{
 };
 
 use tower_defense::{
-    crypto::{Keypair, PublicKey},
+    crypto::{Keypair, PeerId},
     middleware,
 };
 
@@ -39,7 +39,7 @@ async fn run_server() -> Option<std::net::SocketAddr> {
 
     module
         .register_method("echo", |params, (), ext| {
-            println!("Request by: {:?}", ext.get::<PublicKey>());
+            println!("Request by: {:?}", ext.get::<PeerId>());
             let string: String = params
                 .one()
                 .inspect_err(|e| eprintln!("Error: {e:?}"))

@@ -8,7 +8,10 @@ use jsonrpsee::{
     types::{ErrorCode, Id, Request},
 };
 
-use crate::{auth::AuthenticatedParams, crypto::Keypair};
+use crate::{
+    auth::AuthenticatedParams,
+    crypto::{Keypair, PeerId},
+};
 
 pub struct Sign<S> {
     keypair: Keypair,
@@ -126,7 +129,7 @@ where
             }
 
             request.params = auth.inner;
-            request.extensions_mut().insert(auth.signer);
+            request.extensions_mut().insert(PeerId::from(auth.signer));
 
             inner.call(request).await
         }
