@@ -169,3 +169,26 @@ fn encode_ed25519(pubkey_bytes: &[u8; 32]) -> Vec<u8> {
     }
     buf
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use crate::crypto::Keypair;
+
+    #[test]
+    fn example_1() {
+        let mut signing_key_raw = [0u8; 32];
+        hex::decode_to_slice(
+            "87ad5ca4be14d1a97c49b915bc6a33849425469921649f4ec970cad30c0d9a94",
+            &mut signing_key_raw,
+        )
+        .unwrap();
+        let keypair = Keypair::from_secret_bytes(&signing_key_raw);
+        let peer_id = PeerId::from(keypair.public());
+
+        assert_eq!(
+            peer_id.to_base58(),
+            "12D3KooWDZy8EabSzFCSSNZFRvUpkhLAb1WCTv3KVEYJuryW9H1N"
+        );
+    }
+}

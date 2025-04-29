@@ -1,7 +1,4 @@
-use std::{
-    borrow::Cow,
-    time::{Duration, UNIX_EPOCH},
-};
+use std::borrow::Cow;
 
 use jsonrpsee::{
     core::{params::ObjectParams, traits::ToRpcParams},
@@ -11,9 +8,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::value::RawValue;
 
 use crate::{
-    crypto::{Keypair, PublicKey, Signature},
+    crypto::{Keypair, PeerId, PublicKey, Signature},
     error::Error,
 };
+
+pub mod timestamp;
+pub use timestamp::VerifyTimestamp;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthenticatedParams<'a> {
@@ -22,6 +22,12 @@ pub struct AuthenticatedParams<'a> {
     pub(crate) timestamp: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) inner: Option<Cow<'a, RawValue>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct VerifiedParams<'a> {
+    pub peer: PeerId,
+    pub inner: Option<Cow<'a, RawValue>>,
 }
 
 impl<'a> AuthenticatedParams<'a> {
@@ -56,7 +62,13 @@ impl<'a> AuthenticatedParams<'a> {
         method: &'a str,
         params: Option<Cow<'a, RawValue>>,
     ) -> Result<Self, Error> {
-        Ok(Self::prepare(keypair, id, method, params, now()?))
+        Ok(Self::prepare(
+            keypair,
+            id,
+            method,
+            params,
+            timestamp::now()?,
+        ))
     }
 
     /// Verify authenticated params at a given timestamp.
@@ -64,24 +76,25 @@ impl<'a> AuthenticatedParams<'a> {
     /// # Errors
     ///
     /// This function will return an error if the signature or timestamp verification fails.
-    pub fn verify(&self, id: &Id<'_>, method: &str, now: u64) -> Result<(), Error> {
-        if Duration::from_millis(now.abs_diff(self.timestamp)) > Duration::from_secs(5) {
-            return Err(Error::InvalidTimestamp);
-        }
-
+    pub fn verify<VT: VerifyTimestamp>(
+        self,
+        id: &Id<'_>,
+        method: &str,
+        verify_timestamp: &VT,
+    ) -> Result<VerifiedParams<'a>, Error> {
         let signing_metarial = signing_material(self.timestamp, id, method, self.inner.as_ref());
         self.signer.verify(&signing_metarial, &self.signature)?;
 
-        Ok(())
-    }
+        let peer = PeerId::from(self.signer);
 
-    /// Verify authenticated params using the current `SystemTime`.
-    ///
-    /// # Errors
-    ///
-    /// This function will return an error if the signature or timestamp verification fails.
-    pub fn verify_now(&self, id: &Id<'_>, method: &str) -> Result<(), Error> {
-        self.verify(id, method, now()?)
+        if !verify_timestamp.verify(&peer, self.timestamp) {
+            return Err(Error::InvalidTimestamp);
+        }
+
+        Ok(VerifiedParams {
+            peer,
+            inner: self.inner,
+        })
     }
 }
 
@@ -98,15 +111,6 @@ impl ToRpcParams for AuthenticatedParams<'_> {
 
         p.to_rpc_params()
     }
-}
-
-/// Number of milliseconds from the unix epoch
-fn now() -> Result<u64, Error> {
-    let millis = std::time::SystemTime::now()
-        .duration_since(UNIX_EPOCH)?
-        .as_millis();
-
-    Ok(u64::try_from(millis)?)
 }
 
 fn signing_material(

@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use jsonrpsee::{
     core::client::ClientT,
     http_client::HttpClientBuilder,
@@ -6,6 +8,7 @@ use jsonrpsee::{
 };
 
 use tower_defense::{
+    auth::timestamp::WithinDuration,
     crypto::{Keypair, PeerId},
     middleware,
 };
@@ -30,7 +33,9 @@ async fn main() {
 
 async fn run_server() -> Option<std::net::SocketAddr> {
     let server = jsonrpsee::server::Server::builder()
-        .set_rpc_middleware(RpcServiceBuilder::new().layer_fn(middleware::Verify::new))
+        .set_rpc_middleware(RpcServiceBuilder::new().layer_fn(|inner| {
+            middleware::Verify::new(inner, WithinDuration(Duration::from_secs(2)))
+        }))
         .build("127.0.0.1:6969")
         .await
         .ok()?;
@@ -39,7 +44,7 @@ async fn run_server() -> Option<std::net::SocketAddr> {
 
     module
         .register_method("echo", |params, (), ext| {
-            println!("Request by: {:?}", ext.get::<PeerId>());
+            println!("{:?}: {:?}", ext.get::<PeerId>(), params.as_str());
             let string: String = params
                 .one()
                 .inspect_err(|e| eprintln!("Error: {e:?}"))
@@ -51,7 +56,7 @@ async fn run_server() -> Option<std::net::SocketAddr> {
     let addr = server.local_addr().ok()?;
     let handle = server.start(module);
 
-    // In this example we don't care about doing shutdown so let's it run forever.
+    // In this example we don't care about doing shutdown so let it run forever.
     // You may use the `ServerHandle` to shut it down or manage it yourself.
     tokio::spawn(handle.stopped());
 

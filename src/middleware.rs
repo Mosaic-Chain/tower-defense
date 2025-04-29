@@ -9,8 +9,8 @@ use jsonrpsee::{
 };
 
 use crate::{
-    auth::AuthenticatedParams,
-    crypto::{Keypair, PeerId},
+    auth::{AuthenticatedParams, VerifyTimestamp},
+    crypto::Keypair,
 };
 
 pub struct Sign<S> {
@@ -95,19 +95,24 @@ where
     }
 }
 
-pub struct Verify<S> {
+pub struct Verify<S, VT> {
     inner: S,
+    verify_timestamp: VT,
 }
 
-impl<S> Verify<S> {
-    pub fn new(inner: S) -> Self {
-        Self { inner }
+impl<S, VT> Verify<S, VT> {
+    pub fn new(inner: S, verify_timestamp: VT) -> Self {
+        Self {
+            inner,
+            verify_timestamp,
+        }
     }
 }
 
-impl<S> RpcServiceT for Verify<S>
+impl<S, VT> RpcServiceT for Verify<S, VT>
 where
-    S: RpcServiceT<MethodResponse = MethodResponse> + Send + Sync + Clone + 'static,
+    S: RpcServiceT<MethodResponse = MethodResponse> + Send + Clone + 'static,
+    VT: VerifyTimestamp + Clone + Send + 'static,
 {
     type MethodResponse = MethodResponse;
     type NotificationResponse = MethodResponse;
@@ -118,18 +123,20 @@ where
         mut request: Request<'a>,
     ) -> impl Future<Output = Self::MethodResponse> + Send + 'a {
         let inner = self.inner.clone();
+        let verify_timestamp = self.verify_timestamp.clone();
 
         async move {
             let Ok(auth) = request.params().parse::<AuthenticatedParams>() else {
                 return MethodResponse::error(request.id, ErrorCode::InvalidRequest);
             };
 
-            if auth.verify_now(&request.id, request.method_name()).is_err() {
+            let Ok(verified) = auth.verify(&request.id, request.method_name(), &verify_timestamp)
+            else {
                 return MethodResponse::error(request.id, ErrorCode::InvalidRequest);
-            }
+            };
 
-            request.params = auth.inner;
-            request.extensions_mut().insert(PeerId::from(auth.signer));
+            request.params = verified.inner;
+            request.extensions_mut().insert(verified.peer);
 
             inner.call(request).await
         }
