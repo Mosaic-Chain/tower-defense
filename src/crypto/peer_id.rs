@@ -1,6 +1,7 @@
 use std::str::FromStr;
 
-use quick_protobuf::Writer;
+use ed25519_dalek::VerifyingKey;
+use quick_protobuf::{BytesReader, Writer};
 use serde::{Deserialize, Serialize};
 use sha2::Digest as _;
 
@@ -10,6 +11,11 @@ const MAX_INLINE_KEY_LENGTH: usize = 42;
 
 const MULTIHASH_IDENTITY_CODE: u64 = 0;
 const MULTIHASH_SHA256_CODE: u64 = 0x12;
+
+const KEY_TYPE_TAG: u32 = 8;
+const KEY_DATA_TAG: u32 = 18;
+const ED25519_KEY_TYPE: i32 = 1;
+const ED25519_PUBLIC_KEY_LENGTH: usize = 32;
 
 type Multihash = multihash::Multihash<64>;
 
@@ -69,6 +75,18 @@ impl From<PublicKey> for PeerId {
     }
 }
 
+impl TryFrom<PeerId> for PublicKey {
+    type Error = ParseError;
+
+    fn try_from(peer_id: PeerId) -> Result<Self, Self::Error> {
+        if peer_id.0.code() != MULTIHASH_IDENTITY_CODE {
+            return Err(ParseError::NotIdentity);
+        }
+
+        decode_ed25519(peer_id.0.digest()).map(Into::into)
+    }
+}
+
 impl std::fmt::Debug for PeerId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("PeerId").field(&self.to_base58()).finish()
@@ -85,20 +103,35 @@ impl std::fmt::Display for PeerId {
 pub enum ParseError {
     #[error("base-58 decode error: {0}")]
     B58(#[from] bs58::decode::Error),
+    #[error("hex decode error: {0}")]
+    Hex(#[from] hex::FromHexError),
     #[error("unsupported multihash code '{0}'")]
     UnsupportedCode(u64),
     #[error("invalid multihash")]
     InvalidMultihash(#[from] multihash::Error),
+    #[error("peer id does not use the identity multihash, its public key cannot be recovered")]
+    NotIdentity,
+    #[error("missing ed25519 public key")]
+    MissingKey,
+    #[error("unsupported key type, expected ed25519")]
+    UnsupportedKeyType,
+    #[error("invalid ed25519 public key length: expected 32, got {0}")]
+    InvalidKeyLength(usize),
+    #[error("protobuf decode error: {0}")]
+    Protobuf(#[from] quick_protobuf::Error),
+    #[error("invalid ed25519 public key: {0}")]
+    InvalidKey(#[from] ed25519_dalek::SignatureError),
+    #[error("could not decode as hex or base-58")]
+    UnknownEncoding,
 }
 
 impl FromStr for PeerId {
     type Err = ParseError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let bytes = bs58::decode(s).into_vec()?;
-        let peer_id = PeerId::from_bytes(&bytes)?;
+        let bytes = super::str_as_bytes(s).map_err(|_| ParseError::UnknownEncoding)?;
 
-        Ok(peer_id)
+        PeerId::from_bytes(&bytes)
     }
 }
 
@@ -160,35 +193,122 @@ fn encode_ed25519(pubkey_bytes: &[u8; 32]) -> Vec<u8> {
         let mut writer = Writer::new(&mut buf);
         // Write field 1: Tag = (1 << 3) | 0 = 8. Write the enum wariant 1 for ed25519.
         writer
-            .write_with_tag(8, |w| w.write_enum(1))
+            .write_with_tag(KEY_TYPE_TAG, |w| w.write_enum(1))
             .expect("could write enum variant");
         // Write field 2: Tag = (2 << 3) | 2 = 18. Write the 32 bytes.
         writer
-            .write_with_tag(18, |w| w.write_bytes(&pubkey_bytes[..]))
+            .write_with_tag(KEY_DATA_TAG, |w| w.write_bytes(&pubkey_bytes[..]))
             .expect("could write all 32 bytes of public key");
     }
     buf
 }
 
+fn decode_ed25519(digest: &[u8]) -> Result<VerifyingKey, ParseError> {
+    let mut reader = BytesReader::from_bytes(digest);
+    let mut key_type = None;
+    let mut key_data = None;
+
+    while !reader.is_eof() {
+        let tag = reader.next_tag(digest)?;
+
+        match tag {
+            KEY_TYPE_TAG => key_type = Some(reader.read_enum::<i32>(digest)?),
+            KEY_DATA_TAG => key_data = Some(reader.read_bytes(digest)?),
+            _ => reader.read_unknown(digest, tag)?,
+        }
+    }
+
+    if key_type != Some(ED25519_KEY_TYPE) {
+        return Err(ParseError::UnsupportedKeyType);
+    }
+
+    let key_data = key_data.ok_or(ParseError::MissingKey)?;
+    let key_data: &[u8; ED25519_PUBLIC_KEY_LENGTH] = key_data
+        .try_into()
+        .map_err(|_| ParseError::InvalidKeyLength(key_data.len()))?;
+
+    Ok(VerifyingKey::from_bytes(key_data)?)
+}
+
 #[cfg(test)]
 mod test {
+    use sha2::Sha256;
+
     use super::*;
     use crate::crypto::Keypair;
 
-    #[test]
-    fn example_1() {
+    const PEER_ID: &str = "12D3KooWDZy8EabSzFCSSNZFRvUpkhLAb1WCTv3KVEYJuryW9H1N";
+
+    fn keypair() -> Keypair {
         let mut signing_key_raw = [0u8; 32];
         hex::decode_to_slice(
             "87ad5ca4be14d1a97c49b915bc6a33849425469921649f4ec970cad30c0d9a94",
             &mut signing_key_raw,
         )
-        .unwrap();
-        let keypair = Keypair::from_secret_bytes(&signing_key_raw);
-        let peer_id = PeerId::from(keypair.public());
+        .expect("valid key hex");
+        Keypair::from_secret_bytes(&signing_key_raw)
+    }
 
-        assert_eq!(
-            peer_id.to_base58(),
-            "12D3KooWDZy8EabSzFCSSNZFRvUpkhLAb1WCTv3KVEYJuryW9H1N"
-        );
+    #[test]
+    fn example_1() -> Result<(), Box<dyn std::error::Error>> {
+        let peer_id = PeerId::from(keypair().public());
+
+        assert_eq!(peer_id.to_base58(), PEER_ID);
+
+        Ok(())
+    }
+
+    #[test]
+    fn parses_base58_and_hex() -> Result<(), Box<dyn std::error::Error>> {
+        let peer_id = PeerId::from(keypair().public());
+        let hex = hex::encode(peer_id.to_bytes());
+
+        assert_eq!(PEER_ID.parse::<PeerId>()?, peer_id);
+        assert_eq!(hex.parse::<PeerId>()?, peer_id);
+        assert_eq!(format!("0x{hex}").parse::<PeerId>()?, peer_id);
+
+        let json = serde_json::to_string(&hex)?;
+        assert_eq!(serde_json::from_str::<PeerId>(&json)?, peer_id);
+
+        let json = serde_json::to_string(&peer_id)?;
+        assert_eq!(json, serde_json::to_string(PEER_ID)?);
+        assert_eq!(serde_json::from_str::<PeerId>(&json)?, peer_id);
+
+        Ok(())
+    }
+
+    #[test]
+    fn converts_back_to_public_key() -> Result<(), Box<dyn std::error::Error>> {
+        let keypair = keypair();
+        let peer_id = PeerId::from(keypair.public());
+        let public = PublicKey::try_from(peer_id)?;
+
+        assert_eq!(public.0.as_bytes(), keypair.public().0.as_bytes());
+
+        Ok(())
+    }
+
+    #[test]
+    fn sha256_peer_id_cannot_be_converted() -> Result<(), Box<dyn std::error::Error>> {
+        let digest = Sha256::digest([0u8; 32]);
+        let multihash = Multihash::wrap(MULTIHASH_SHA256_CODE, &digest)?;
+        let peer_id = PeerId::from_multihash(multihash).expect("multihash code works");
+
+        assert!(PublicKey::try_from(peer_id).is_err());
+
+        Ok(())
+    }
+
+    #[test]
+    fn symmetric_encoding() -> Result<(), Box<dyn std::error::Error>> {
+        let public_key = keypair().public();
+
+        let encoded = encode_ed25519(public_key.0.as_bytes());
+
+        let decoded = decode_ed25519(&encoded)?;
+
+        assert_eq!(public_key.0.as_bytes(), decoded.as_bytes());
+
+        Ok(())
     }
 }

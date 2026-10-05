@@ -1631,7 +1631,7 @@ dependencies = [
 
 [[package]]
 name = "tower-defense"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "bs58",
  "ed25519-dalek",
