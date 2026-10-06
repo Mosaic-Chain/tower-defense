@@ -129,3 +129,88 @@ fn signing_material(
     ]
     .concat()
 }
+
+#[cfg(test)]
+mod tests {
+    use std::borrow::Cow;
+
+    use jsonrpsee::types::Id;
+    use serde_json::value::RawValue;
+
+    use super::*;
+    use crate::auth::VerifyTimestamp;
+
+    struct AcceptAll;
+
+    impl VerifyTimestamp for AcceptAll {
+        fn verify(&self, _peer: &PeerId, _timestamp: u64) -> bool {
+            true
+        }
+    }
+
+    fn keypair() -> Keypair {
+        let mut raw = [0u8; 32];
+        hex::decode_to_slice(
+            "87ad5ca4be14d1a97c49b915bc6a33849425469921649f4ec970cad30c0d9a94",
+            &mut raw,
+        )
+        .expect("valid key hex");
+        Keypair::from_secret_bytes(&raw)
+    }
+
+    fn prepared() -> Result<AuthenticatedParams<'static>, Box<dyn std::error::Error>> {
+        let params = Some(Cow::Owned(RawValue::from_string("[\"foo\"]".to_owned())?));
+
+        Ok(AuthenticatedParams::prepare(
+            &keypair(),
+            &Id::Number(1),
+            "echo",
+            params,
+            1_700_000_000_000,
+        ))
+    }
+
+    fn verify(params: AuthenticatedParams<'_>) -> Result<(), Box<dyn std::error::Error>> {
+        let verified = params.verify(&Id::Number(1), "echo", &AcceptAll)?;
+
+        assert_eq!(verified.peer, PeerId::from(keypair().public()));
+
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_byte_array_envelope_is_accepted() -> Result<(), Box<dyn std::error::Error>> {
+        verify(prepared()?)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn hex_and_base58_envelope_is_accepted() -> Result<(), Box<dyn std::error::Error>> {
+        let mut value = serde_json::to_value(prepared()?)?;
+        let signer = Vec::<u8>::deserialize(&value["signer"])?;
+        let signature = Vec::<u8>::deserialize(&value["signature"])?;
+
+        value["signer"] = hex::encode(&signer).into();
+        value["signature"] = format!("0x{}", hex::encode(&signature)).into();
+        verify(serde_json::from_str(&serde_json::to_string(&value)?)?)?;
+
+        value["signer"] = bs58::encode(&signer).into_string().into();
+        value["signature"] = bs58::encode(&signature).into_string().into();
+        verify(serde_json::from_str(&serde_json::to_string(&value)?)?)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn peer_id_envelope_is_accepted() -> Result<(), Box<dyn std::error::Error>> {
+        let mut value = serde_json::to_value(prepared()?)?;
+        let signer = Vec::<u8>::deserialize(&value["signer"])?;
+        let public = PublicKey::from_slice(&signer)?;
+
+        value["signer"] = PeerId::from(public).to_base58().into();
+        verify(serde_json::from_str(&serde_json::to_string(&value)?)?)?;
+
+        Ok(())
+    }
+}
